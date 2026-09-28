@@ -4,6 +4,7 @@ import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
+import androidx.activity.viewModels
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -29,14 +30,18 @@ import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.remember
-import androidx.compose.runtime.setValue
+import androidx.compose.runtime.collectAsState
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.unit.dp
+import androidx.lifecycle.ViewModel
+import androidx.lifecycle.viewmodel.compose.viewModel
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
+
 
 data class Manga(
     val id: String,
@@ -47,7 +52,7 @@ data class Manga(
     val imageRes: Int
 )
 
-val mangaList = listOf(
+val initialMangaList = listOf(
     Manga(
         id = "1",
         title = "One Piece",
@@ -98,19 +103,59 @@ val mangaList = listOf(
     )
 )
 
-class MainActivity : ComponentActivity() {
+data class MangaScreenState(
+    val selectedStatus: String = "Усі",
+    val mangaList: List<Manga> = initialMangaList
+)
 
+class MangaViewModel : ViewModel() {
+    private val _uiState = MutableStateFlow(
+        MangaScreenState()
+    )
+
+    val uiState: StateFlow<MangaScreenState> =
+        _uiState.asStateFlow()
+
+    fun selectStatus(status: String) {
+        _uiState.value = _uiState.value.copy(
+            selectedStatus = status
+        )
+    }
+
+    fun changeMangaStatus(
+        mangaId: String,
+        newStatus: String
+    ) {
+
+        val updatedList = _uiState.value.mangaList.map { manga ->
+            if (manga.id == mangaId) {
+                manga.copy(
+                    status = newStatus
+                )
+            } else {
+                manga
+            }
+        }
+        _uiState.value = _uiState.value.copy(
+            mangaList = updatedList
+        )
+    }
+}
+
+class MainActivity : ComponentActivity() {
+    private val mangaViewModel: MangaViewModel by viewModels()
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
         enableEdgeToEdge()
-
         setContent {
             MaterialTheme {
                 Surface(
                     modifier = Modifier.fillMaxSize()
                 ) {
-                    MangaApp()
+                    MangaApp(
+                        viewModel = mangaViewModel
+                    )
                 }
             }
         }
@@ -119,7 +164,10 @@ class MainActivity : ComponentActivity() {
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun MangaApp() {
+fun MangaApp(
+    viewModel: MangaViewModel = viewModel()
+) {
+    val uiState by viewModel.uiState.collectAsState()
 
     val statuses = listOf(
         "Усі",
@@ -128,19 +176,11 @@ fun MangaApp() {
         "Хочу прочитати"
     )
 
-    var selectedStatus by remember {
-        mutableStateOf("Усі")
-    }
-
-    var mangaState by remember {
-        mutableStateOf(mangaList)
-    }
-
-    val filteredManga = if (selectedStatus == "Усі") {
-        mangaState
+    val filteredManga = if (uiState.selectedStatus == "Усі") {
+        uiState.mangaList
     } else {
-        mangaState.filter { manga ->
-            manga.status == selectedStatus
+        uiState.mangaList.filter { manga ->
+            manga.status == uiState.selectedStatus
         }
     }
 
@@ -153,7 +193,6 @@ fun MangaApp() {
             )
         }
     ) { innerPadding ->
-
         Column(
             modifier = Modifier
                 .fillMaxSize()
@@ -162,14 +201,13 @@ fun MangaApp() {
 
             StatusSwitcher(
                 options = statuses,
-                selectedOption = selectedStatus,
+                selectedOption = uiState.selectedStatus,
                 onOptionSelected = { status ->
-                    selectedStatus = status
+                    viewModel.selectStatus(status)
                 }
             )
 
             if (filteredManga.isEmpty()) {
-
                 Box(
                     modifier = Modifier.fillMaxSize(),
                     contentAlignment = Alignment.Center
@@ -179,15 +217,15 @@ fun MangaApp() {
                         style = MaterialTheme.typography.titleMedium
                     )
                 }
-
             } else {
-
                 LazyColumn(
                     modifier = Modifier
                         .fillMaxSize()
                         .padding(horizontal = 16.dp),
-                    verticalArrangement = Arrangement.spacedBy(16.dp)
+                    verticalArrangement =
+                        Arrangement.spacedBy(16.dp)
                 ) {
+
 
                     item {
                         Spacer(
@@ -197,27 +235,22 @@ fun MangaApp() {
 
                     items(
                         items = filteredManga,
-                        key = { manga -> manga.id }
+                        key = { manga ->
+                            manga.id
+                        }
                     ) { manga ->
-
                         MangaCard(
                             manga = manga,
                             statuses = statuses.drop(1),
                             onStatusChanged = { newStatus ->
-
-                                mangaState = mangaState.map { item ->
-
-                                    if (item.id == manga.id) {
-                                        item.copy(
-                                            status = newStatus
-                                        )
-                                    } else {
-                                        item
-                                    }
-                                }
+                                viewModel.changeMangaStatus(
+                                    mangaId = manga.id,
+                                    newStatus = newStatus
+                                )
                             }
                         )
                     }
+
 
                     item {
                         Spacer(
@@ -244,11 +277,12 @@ fun StatusSwitcher(
                 horizontal = 8.dp,
                 vertical = 8.dp
             ),
-        horizontalArrangement = Arrangement.spacedBy(8.dp)
+
+        horizontalArrangement =
+            Arrangement.spacedBy(8.dp)
     ) {
 
         options.forEach { option ->
-
             FilterChip(
                 selected = option == selectedOption,
                 onClick = {
@@ -267,26 +301,25 @@ fun MangaCard(
     manga: Manga,
     statuses: List<String>,
     onStatusChanged: (String) -> Unit
+
 ) {
 
-    var menuExpanded by remember {
-        mutableStateOf(false)
+    val menuState = androidx.compose.runtime.remember {
+        androidx.compose.runtime.mutableStateOf(false)
     }
+
 
     Card(
         modifier = Modifier.fillMaxWidth()
     ) {
-
         Column(
             modifier = Modifier.padding(12.dp)
         ) {
-
             Box(
                 modifier = Modifier
                     .fillMaxWidth()
                     .height(300.dp)
             ) {
-
                 Image(
                     painter = painterResource(
                         id = manga.imageRes
@@ -296,10 +329,12 @@ fun MangaCard(
                     contentScale = ContentScale.Crop
                 )
 
+
                 Box(
                     modifier = Modifier
                         .align(Alignment.TopEnd)
                 ) {
+
 
                     Surface(
                         modifier = Modifier.padding(8.dp),
@@ -308,74 +343,87 @@ fun MangaCard(
 
                         TextButton(
                             onClick = {
-                                menuExpanded = true
+                                menuState.value = true
                             }
                         ) {
                             Text(manga.status)
                         }
                     }
 
+
                     DropdownMenu(
-                        expanded = menuExpanded,
+                        expanded = menuState.value,
                         onDismissRequest = {
-                            menuExpanded = false
+                            menuState.value = false
                         }
                     ) {
 
                         statuses.forEach { status ->
-
                             DropdownMenuItem(
                                 text = {
                                     Text(status)
                                 },
                                 onClick = {
-
                                     onStatusChanged(status)
-
-                                    menuExpanded = false
+                                    menuState.value = false
                                 }
                             )
                         }
                     }
                 }
             }
-
             Spacer(
                 modifier = Modifier.height(12.dp)
             )
 
             Text(
                 text = manga.title,
-                style = MaterialTheme.typography.headlineSmall
+                style =
+                    MaterialTheme.typography.headlineSmall
             )
+
 
             Spacer(
                 modifier = Modifier.height(8.dp)
             )
 
+
+            // -------------------------------------------------
+            // ХАРАКТЕРИСТИКИ
+            // -------------------------------------------------
+
             Row(
+
                 modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween
+                horizontalArrangement =
+                    Arrangement.SpaceBetween
             ) {
+
 
                 Text(
                     text = "Рік: ${manga.year}",
-                    style = MaterialTheme.typography.bodyMedium
+                    style =
+                        MaterialTheme.typography.bodyMedium
                 )
+
 
                 Text(
                     text = "Рейтинг: ${manga.rating}",
-                    style = MaterialTheme.typography.bodyMedium
+                    style =
+                        MaterialTheme.typography.bodyMedium
                 )
             }
+
 
             Spacer(
                 modifier = Modifier.height(6.dp)
             )
 
+
             Text(
                 text = "Статус: ${manga.status}",
-                style = MaterialTheme.typography.bodyMedium
+                style =
+                    MaterialTheme.typography.bodyMedium
             )
         }
     }
