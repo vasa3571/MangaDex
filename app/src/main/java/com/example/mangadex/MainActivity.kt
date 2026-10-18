@@ -1,5 +1,7 @@
 package com.example.mangadex
 
+import android.app.Application
+import android.content.Context
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
@@ -28,13 +30,13 @@ import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilterChip
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.RadioButton
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
-import androidx.compose.material3.TextButton
-import androidx.compose.material3.IconButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
@@ -45,18 +47,60 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
-import androidx.lifecycle.ViewModel
-import androidx.lifecycle.viewmodel.compose.viewModel
+import androidx.datastore.core.DataStore
+import androidx.datastore.preferences.core.Preferences
+import androidx.datastore.preferences.core.edit
+import androidx.datastore.preferences.core.stringPreferencesKey
+import androidx.datastore.preferences.preferencesDataStore
+import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
-import kotlinx.coroutines.flow.MutableStateFlow
-import kotlinx.coroutines.flow.StateFlow
-import kotlinx.coroutines.flow.asStateFlow
-import kotlinx.coroutines.flow.update
+import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.navigation.NavType
 import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.compose.rememberNavController
 import androidx.navigation.navArgument
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.SharingStarted
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.stateIn
+import kotlinx.coroutines.flow.update
+import kotlinx.coroutines.launch
+
+
+val Context.dataStore: DataStore<Preferences> by preferencesDataStore(name = "manga_settings")
+
+enum class SortOption(val title: String) {
+    DEFAULT("За замовчуванням"),
+    BY_TITLE("За назвою (A-Z)"),
+    BY_RATING("За рейтингом (спочатку високий)")
+}
+
+class SettingsRepository(private val context: Context) {
+    companion object {
+        val SORT_KEY = stringPreferencesKey("sort_option")
+    }
+
+    val sortOptionFlow: Flow<SortOption> = context.dataStore.data.map { preferences ->
+        val savedName = preferences[SORT_KEY] ?: SortOption.DEFAULT.name
+        try {
+            SortOption.valueOf(savedName)
+        } catch (e: Exception) {
+            SortOption.DEFAULT
+        }
+    }
+
+    // Suspend-функція для запису у сховище
+    suspend fun saveSortOption(sortOption: SortOption) {
+        context.dataStore.edit { preferences ->
+            preferences[SORT_KEY] = sortOption.name
+        }
+    }
+}
+
 
 data class Manga(
     val id: String,
@@ -139,54 +183,62 @@ val initialMangaList = listOf(
     )
 )
 
-// -------------------- СТАН ЕКРАНА --------------------
 
 data class MangaScreenState(
     val selectedStatus: String = "Усі",
-    val mangaList: List<Manga> = initialMangaList
+    val mangaList: List<Manga> = initialMangaList,
+    val sortOption: SortOption = SortOption.DEFAULT
 )
 
-// -------------------- VIEWMODEL --------------------
+class MangaViewModel(application: Application) : AndroidViewModel(application) {
 
-class MangaViewModel : ViewModel() {
+    private val settingsRepository = SettingsRepository(application)
 
-    private val _uiState = MutableStateFlow(MangaScreenState())
+    private val _selectedStatus = MutableStateFlow("Усі")
+    private val _mangaList = MutableStateFlow(initialMangaList)
 
-    val uiState: StateFlow<MangaScreenState> =
-        _uiState.asStateFlow()
+    val uiState: StateFlow<MangaScreenState> = combine(
+        _selectedStatus,
+        _mangaList,
+        settingsRepository.sortOptionFlow
+    ) { status, list, sort ->
+        MangaScreenState(
+            selectedStatus = status,
+            mangaList = list,
+            sortOption = sort
+        )
+    }.stateIn(
+        scope = viewModelScope,
+        started = SharingStarted.WhileSubscribed(5000),
+        initialValue = MangaScreenState()
+    )
 
     fun selectStatus(status: String) {
-        _uiState.update { current ->
-            current.copy(selectedStatus = status)
-        }
+        _selectedStatus.value = status
     }
 
     fun changeMangaStatus(mangaId: String, newStatus: String) {
-        _uiState.update { current ->
-            current.copy(
-                mangaList = current.mangaList.map { manga ->
-                    if (manga.id == mangaId) {
-                        manga.copy(status = newStatus)
-                    } else {
-                        manga
-                    }
-                }
-            )
+        _mangaList.update { current ->
+            current.map { manga ->
+                if (manga.id == mangaId) manga.copy(status = newStatus) else manga
+            }
+        }
+    }
+
+    fun updateSortOption(sortOption: SortOption) {
+        viewModelScope.launch {
+            settingsRepository.saveSortOption(sortOption)
         }
     }
 }
 
-// -------------------- ACTIVITY --------------------
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-
         setContent {
             MaterialTheme {
-                Surface(
-                    modifier = Modifier.fillMaxSize()
-                ) {
+                Surface(modifier = Modifier.fillMaxSize()) {
                     MangaApp()
                 }
             }
@@ -208,49 +260,39 @@ fun MangaApp(
         composable("catalog") {
             CatalogScreen(
                 state = uiState,
-                onStatusSelected = { status ->
-                    viewModel.selectStatus(status)
+                onStatusSelected = { status -> viewModel.selectStatus(status) },
+                onItemClick = { mangaId -> navController.navigate("details/$mangaId") },
+                onSettingsClick = { navController.navigate("settings") }
+            )
+        }
+
+        composable("settings") {
+            SettingsScreen(
+                currentSortOption = uiState.sortOption,
+                onSortOptionSelected = { sortOption ->
+                    viewModel.updateSortOption(sortOption)
                 },
-                onItemClick = { mangaId ->
-                    navController.navigate("details/$mangaId")
-                }
+                onBackClick = { navController.popBackStack() }
             )
         }
 
         composable(
             route = "details/{mangaId}",
-            arguments = listOf(
-                navArgument("mangaId") {
-                    type = NavType.StringType
-                }
-            )
+            arguments = listOf(navArgument("mangaId") { type = NavType.StringType })
         ) { backStackEntry ->
-            val mangaId =
-                backStackEntry.arguments?.getString("mangaId")
-
-            val manga = uiState.mangaList.find {
-                it.id == mangaId
-            }
+            val mangaId = backStackEntry.arguments?.getString("mangaId")
+            val manga = uiState.mangaList.find { it.id == mangaId }
 
             if (manga != null) {
                 MangaDetailsScreen(
                     manga = manga,
-                    onBackClick = {
-                        navController.popBackStack()
-                    },
+                    onBackClick = { navController.popBackStack() },
                     onStatusChange = { newStatus ->
-                        viewModel.changeMangaStatus(
-                            mangaId = manga.id,
-                            newStatus = newStatus
-                        )
+                        viewModel.changeMangaStatus(mangaId = manga.id, newStatus = newStatus)
                     }
                 )
             } else {
-                NotFoundScreen(
-                    onBackClick = {
-                        navController.popBackStack()
-                    }
-                )
+                NotFoundScreen(onBackClick = { navController.popBackStack() })
             }
         }
     }
@@ -261,20 +303,30 @@ fun MangaApp(
 fun CatalogScreen(
     state: MangaScreenState,
     onStatusSelected: (String) -> Unit,
-    onItemClick: (String) -> Unit
+    onItemClick: (String) -> Unit,
+    onSettingsClick: () -> Unit
 ) {
     val filteredManga = if (state.selectedStatus == "Усі") {
         state.mangaList
     } else {
-        state.mangaList.filter {
-            it.status == state.selectedStatus
-        }
+        state.mangaList.filter { it.status == state.selectedStatus }
+    }
+
+    val sortedManga = when (state.sortOption) {
+        SortOption.DEFAULT -> filteredManga
+        SortOption.BY_TITLE -> filteredManga.sortedBy { it.title }
+        SortOption.BY_RATING -> filteredManga.sortedByDescending { it.rating.toDoubleOrNull() ?: 0.0 }
     }
 
     Scaffold(
         topBar = {
             TopAppBar(
-                title = { Text("Полиця манги") }
+                title = { Text("Полиця манги") },
+                actions = {
+                    IconButton(onClick = onSettingsClick) {
+                        Text("⚙️", style = MaterialTheme.typography.titleLarge)
+                    }
+                }
             )
         }
     ) { paddingValues ->
@@ -293,15 +345,13 @@ fun CatalogScreen(
                 readingStatuses.forEach { status ->
                     FilterChip(
                         selected = state.selectedStatus == status,
-                        onClick = {
-                            onStatusSelected(status)
-                        },
+                        onClick = { onStatusSelected(status) },
                         label = { Text(status) }
                     )
                 }
             }
 
-            if (filteredManga.isEmpty()) {
+            if (sortedManga.isEmpty()) {
                 Box(
                     modifier = Modifier.fillMaxSize(),
                     contentAlignment = Alignment.Center
@@ -314,16 +364,68 @@ fun CatalogScreen(
                     verticalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
                     items(
-                        items = filteredManga,
+                        items = sortedManga,
                         key = { it.id }
                     ) { manga ->
                         MangaCard(
                             manga = manga,
-                            onClick = {
-                                onItemClick(manga.id)
-                            }
+                            onClick = { onItemClick(manga.id) }
                         )
                     }
+                }
+            }
+        }
+    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun SettingsScreen(
+    currentSortOption: SortOption,
+    onSortOptionSelected: (SortOption) -> Unit,
+    onBackClick: () -> Unit
+) {
+    Scaffold(
+        topBar = {
+            TopAppBar(
+                title = { Text("Налаштування") },
+                navigationIcon = {
+                    IconButton(onClick = onBackClick) {
+                        Text("←", style = MaterialTheme.typography.headlineMedium)
+                    }
+                }
+            )
+        }
+    ) { paddingValues ->
+        Column(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(paddingValues)
+                .padding(16.dp)
+        ) {
+            Text(
+                text = "Сортування за замовчуванням",
+                style = MaterialTheme.typography.titleMedium,
+                fontWeight = FontWeight.Bold
+            )
+
+            Spacer(modifier = Modifier.height(12.dp))
+
+            // Показуємо значення прямо з DataStore (без remember)
+            SortOption.entries.forEach { option ->
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clickable { onSortOptionSelected(option) }
+                        .padding(vertical = 8.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    RadioButton(
+                        selected = (option == currentSortOption),
+                        onClick = { onSortOptionSelected(option) }
+                    )
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text(text = option.title)
                 }
             }
         }
@@ -463,19 +565,13 @@ fun MangaDetailsScreen(
             )
 
             Box {
-                Button(
-                    onClick = {
-                        statusMenuExpanded = true
-                    }
-                ) {
+                Button(onClick = { statusMenuExpanded = true }) {
                     Text(manga.status)
                 }
 
                 DropdownMenu(
                     expanded = statusMenuExpanded,
-                    onDismissRequest = {
-                        statusMenuExpanded = false
-                    }
+                    onDismissRequest = { statusMenuExpanded = false }
                 ) {
                     readingStatuses
                         .filter { it != "Усі" }
