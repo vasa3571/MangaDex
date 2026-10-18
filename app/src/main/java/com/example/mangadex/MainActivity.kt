@@ -26,6 +26,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -60,6 +61,7 @@ import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.compose.rememberNavController
 import androidx.navigation.navArgument
+import com.jakewharton.retrofit2.converter.kotlinx.serialization.asConverterFactory
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
@@ -69,6 +71,79 @@ import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import kotlinx.serialization.SerialName
+import kotlinx.serialization.Serializable
+import kotlinx.serialization.json.Json
+import okhttp3.MediaType.Companion.toMediaType
+import retrofit2.Retrofit
+import retrofit2.http.GET
+import retrofit2.http.Query
+
+
+@Serializable
+data class MangaResponseDto(
+    @SerialName("data") val data: List<MangaDataDto> = emptyList()
+)
+
+@Serializable
+data class MangaDataDto(
+    @SerialName("id") val id: String,
+    @SerialName("attributes") val attributes: MangaAttributesDto? = null
+)
+
+@Serializable
+data class MangaAttributesDto(
+    @SerialName("title") val title: Map<String, String>? = null,
+    @SerialName("year") val year: Int? = null,
+    @SerialName("status") val status: String? = null,
+    @SerialName("description") val description: Map<String, String>? = null
+)
+
+interface MangaDexApiService {
+    @GET("manga")
+    suspend fun getMangaList(
+        @Query("limit") limit: Int = 20
+    ): MangaResponseDto
+}
+
+object MangaDexNetwork {
+    private val json = Json {
+        ignoreUnknownKeys = true
+        coerceInputValues = true
+    }
+
+    private val retrofit = Retrofit.Builder()
+        .baseUrl("https://api.mangadex.org/")
+        .addConverterFactory(json.asConverterFactory("application/json".toMediaType()))
+        .build()
+
+    val apiService: MangaDexApiService by lazy {
+        retrofit.create(MangaDexApiService::class.java)
+    }
+}
+
+
+fun MangaDataDto.toDomainModel(localStatus: String = "Усі"): Manga {
+    val attr = this.attributes
+    val parsedTitle = attr?.title?.get("en")
+        ?: attr?.title?.values?.firstOrNull()
+        ?: "Без назви"
+
+    val parsedDescription = attr?.description?.get("en")
+        ?: attr?.description?.values?.firstOrNull()
+        ?: "Опис відсутній"
+
+    return Manga(
+        id = this.id,
+        title = parsedTitle,
+        status = localStatus,
+        year = attr?.year ?: 0,
+        rating = "8.5", // API не віддає рейтинг у базовому запиті
+        author = "MangaDex Author",
+        genres = listOf("Манга", attr?.status ?: "Unknown"),
+        description = parsedDescription
+    )
+}
 
 
 val Context.dataStore: DataStore<Preferences> by preferencesDataStore(name = "manga_settings")
@@ -76,7 +151,7 @@ val Context.dataStore: DataStore<Preferences> by preferencesDataStore(name = "ma
 enum class SortOption(val title: String) {
     DEFAULT("За замовчуванням"),
     BY_TITLE("За назвою (A-Z)"),
-    BY_RATING("За рейтингом (спочатку високий)")
+    BY_YEAR("За роком (спочатку нові)")
 }
 
 class SettingsRepository(private val context: Context) {
@@ -93,14 +168,12 @@ class SettingsRepository(private val context: Context) {
         }
     }
 
-    // Suspend-функція для запису у сховище
     suspend fun saveSortOption(sortOption: SortOption) {
         context.dataStore.edit { preferences ->
             preferences[SORT_KEY] = sortOption.name
         }
     }
 }
-
 
 data class Manga(
     val id: String,
@@ -120,73 +193,11 @@ val readingStatuses = listOf(
     "Хочу прочитати"
 )
 
-val initialMangaList = listOf(
-    Manga(
-        id = "one_piece",
-        title = "One Piece",
-        status = "Читаю",
-        year = 1997,
-        rating = "9.2",
-        author = "Ейічіро Ода",
-        genres = listOf("Пригоди", "Фентезі", "Екшн"),
-        description = "Манга розповідає про пригоди Манкі Д. Луффі та його команди, які вирушають у море на пошуки легендарного скарбу One Piece."
-    ),
-    Manga(
-        id = "naruto",
-        title = "Naruto",
-        status = "Прочитано",
-        year = 1999,
-        rating = "8.5",
-        author = "Масаші Кішімото",
-        genres = listOf("Екшн", "Пригоди", "Ніндзя"),
-        description = "Історія Наруто Узумакі — юного ніндзя, який прагне стати Хокаґе та здобути повагу свого селища."
-    ),
-    Manga(
-        id = "berserk",
-        title = "Berserk",
-        status = "Хочу прочитати",
-        year = 1989,
-        rating = "9.4",
-        author = "Кентаро Міура",
-        genres = listOf("Темне фентезі", "Драма", "Екшн"),
-        description = "Темне фентезі про воїна Ґатса, який мандрує жорстоким світом і протистоїть небезпечним ворогам."
-    ),
-    Manga(
-        id = "attack_on_titan",
-        title = "Attack on Titan",
-        status = "Читаю",
-        year = 2009,
-        rating = "9.0",
-        author = "Хаджіме Ісаяма",
-        genres = listOf("Екшн", "Драма", "Фентезі"),
-        description = "Людство живе за величезними стінами, що захищають його від титанів. Ерен та його друзі намагаються розкрити таємниці навколишнього світу."
-    ),
-    Manga(
-        id = "death_note",
-        title = "Death Note",
-        status = "Прочитано",
-        year = 2003,
-        rating = "8.6",
-        author = "Цуґумі Оба",
-        genres = listOf("Трилер", "Містика", "Детектив"),
-        description = "Старшокласник знаходить загадковий зошит, який змінює його життя, і вступає в інтелектуальне протистояння з детективом."
-    ),
-    Manga(
-        id = "demon_slayer",
-        title = "Demon Slayer",
-        status = "Хочу прочитати",
-        year = 2016,
-        rating = "8.7",
-        author = "Койохару Ґотоґе",
-        genres = listOf("Екшн", "Фентезі", "Пригоди"),
-        description = "Танджіро вирушає в небезпечну подорож, щоб урятувати свою сестру та протистояти демонам."
-    )
-)
-
 
 data class MangaScreenState(
+    val isLoading: Boolean = false,
     val selectedStatus: String = "Усі",
-    val mangaList: List<Manga> = initialMangaList,
+    val mangaList: List<Manga> = emptyList(),
     val sortOption: SortOption = SortOption.DEFAULT
 )
 
@@ -194,15 +205,19 @@ class MangaViewModel(application: Application) : AndroidViewModel(application) {
 
     private val settingsRepository = SettingsRepository(application)
 
+    private val _isLoading = MutableStateFlow(false)
     private val _selectedStatus = MutableStateFlow("Усі")
-    private val _mangaList = MutableStateFlow(initialMangaList)
+    private val _mangaList = MutableStateFlow<List<Manga>>(emptyList())
+    private val _localStatuses = MutableStateFlow<Map<String, String>>(emptyMap())
 
     val uiState: StateFlow<MangaScreenState> = combine(
+        _isLoading,
         _selectedStatus,
         _mangaList,
         settingsRepository.sortOptionFlow
-    ) { status, list, sort ->
+    ) { isLoading, status, list, sort ->
         MangaScreenState(
+            isLoading = isLoading,
             selectedStatus = status,
             mangaList = list,
             sortOption = sort
@@ -210,16 +225,41 @@ class MangaViewModel(application: Application) : AndroidViewModel(application) {
     }.stateIn(
         scope = viewModelScope,
         started = SharingStarted.WhileSubscribed(5000),
-        initialValue = MangaScreenState()
+        initialValue = MangaScreenState(isLoading = true)
     )
+
+    init {
+        fetchMangaFromApi()
+    }
+
+    fun fetchMangaFromApi() {
+        viewModelScope.launch {
+            _isLoading.value = true
+            try {
+                val response = MangaDexNetwork.apiService.getMangaList(limit = 20)
+                val domainList = response.data.map { dto ->
+                    val savedStatus = _localStatuses.value[dto.id] ?: "Усі"
+                    dto.toDomainModel(localStatus = savedStatus)
+                }
+                _mangaList.value = domainList
+            } catch (e: Exception) {
+                e.printStackTrace()
+            } finally {
+                _isLoading.value = false
+            }
+        }
+    }
 
     fun selectStatus(status: String) {
         _selectedStatus.value = status
     }
 
     fun changeMangaStatus(mangaId: String, newStatus: String) {
-        _mangaList.update { current ->
-            current.map { manga ->
+        _localStatuses.update { current ->
+            current + (mangaId to newStatus)
+        }
+        _mangaList.update { currentList ->
+            currentList.map { manga ->
                 if (manga.id == mangaId) manga.copy(status = newStatus) else manga
             }
         }
@@ -269,9 +309,7 @@ fun MangaApp(
         composable("settings") {
             SettingsScreen(
                 currentSortOption = uiState.sortOption,
-                onSortOptionSelected = { sortOption ->
-                    viewModel.updateSortOption(sortOption)
-                },
+                onSortOptionSelected = { sortOption -> viewModel.updateSortOption(sortOption) },
                 onBackClick = { navController.popBackStack() }
             )
         }
@@ -315,13 +353,13 @@ fun CatalogScreen(
     val sortedManga = when (state.sortOption) {
         SortOption.DEFAULT -> filteredManga
         SortOption.BY_TITLE -> filteredManga.sortedBy { it.title }
-        SortOption.BY_RATING -> filteredManga.sortedByDescending { it.rating.toDoubleOrNull() ?: 0.0 }
+        SortOption.BY_YEAR -> filteredManga.sortedByDescending { it.year }
     }
 
     Scaffold(
         topBar = {
             TopAppBar(
-                title = { Text("Полиця манги") },
+                title = { Text("Полиця манги (MangaDex)") },
                 actions = {
                     IconButton(onClick = onSettingsClick) {
                         Text("⚙️", style = MaterialTheme.typography.titleLarge)
@@ -351,12 +389,19 @@ fun CatalogScreen(
                 }
             }
 
-            if (sortedManga.isEmpty()) {
+            if (state.isLoading) {
                 Box(
                     modifier = Modifier.fillMaxSize(),
                     contentAlignment = Alignment.Center
                 ) {
-                    Text("Манги з таким статусом немає")
+                    CircularProgressIndicator()
+                }
+            } else if (sortedManga.isEmpty()) {
+                Box(
+                    modifier = Modifier.fillMaxSize(),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Text("Манги не знайдено")
                 }
             } else {
                 LazyColumn(
@@ -411,7 +456,6 @@ fun SettingsScreen(
 
             Spacer(modifier = Modifier.height(12.dp))
 
-            // Показуємо значення прямо з DataStore (без remember)
             SortOption.entries.forEach { option ->
                 Row(
                     modifier = Modifier
@@ -466,8 +510,7 @@ fun MangaCard(
                 Spacer(modifier = Modifier.height(6.dp))
 
                 Text("Статус: ${manga.status}")
-                Text("Рік: ${manga.year}")
-                Text("Рейтинг: ${manga.rating}/10")
+                if (manga.year > 0) Text("Рік: ${manga.year}")
 
                 Spacer(modifier = Modifier.height(4.dp))
 
@@ -528,23 +571,9 @@ fun MangaDetailsScreen(
 
             Spacer(modifier = Modifier.height(12.dp))
 
-            Text(
-                text = "Автор: ${manga.author}",
-                style = MaterialTheme.typography.bodyLarge
-            )
-            Text("Рік випуску: ${manga.year}")
-            Text("Рейтинг: ${manga.rating}/10")
+            if (manga.year > 0) Text("Рік випуску: ${manga.year}")
 
             Spacer(modifier = Modifier.height(12.dp))
-
-            Text(
-                text = "Жанри",
-                style = MaterialTheme.typography.titleMedium,
-                fontWeight = FontWeight.Bold
-            )
-            Text(manga.genres.joinToString(", "))
-
-            Spacer(modifier = Modifier.height(16.dp))
 
             Text(
                 text = "Опис",
