@@ -1,9 +1,17 @@
 package com.example.mangadex
 
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.setValue
+import android.Manifest
 import android.app.Application
 import android.content.Context
+import android.content.pm.PackageManager
+import android.os.Build
 import android.os.Bundle
+import android.widget.Toast
 import androidx.activity.ComponentActivity
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.compose.setContent
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -40,14 +48,15 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
-import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
+import androidx.core.content.ContextCompat
 import androidx.datastore.core.DataStore
 import androidx.datastore.preferences.core.Preferences
 import androidx.datastore.preferences.core.edit
@@ -73,11 +82,23 @@ import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
+import kotlinx.serialization.SerializationException
 import kotlinx.serialization.json.Json
 import okhttp3.MediaType.Companion.toMediaType
+import retrofit2.HttpException
 import retrofit2.Retrofit
 import retrofit2.http.GET
 import retrofit2.http.Query
+import java.io.IOException
+import java.net.UnknownHostException
+
+
+enum class ApiErrorType(val message: String) {
+    NO_INTERNET("Немає підключення до інтернету. Перевірте авіарежим або Wi-Fi."),
+    SERVER_ERROR("Сервер тимчасово недоступний. Спробуйте пізніше."),
+    PARSE_ERROR("Не вдалося обробити відповідь сервера. Оновіть застосунок."),
+    UNKNOWN("Сталася невідома помилка. Спробуйте ще раз.")
+}
 
 
 @Serializable
@@ -122,7 +143,6 @@ object MangaDexNetwork {
     }
 }
 
-
 fun MangaDataDto.toDomainModel(localStatus: String = "Усі"): Manga {
     val attr = this.attributes
     val parsedTitle = attr?.title?.get("en")
@@ -138,7 +158,7 @@ fun MangaDataDto.toDomainModel(localStatus: String = "Усі"): Manga {
         title = parsedTitle,
         status = localStatus,
         year = attr?.year ?: 0,
-        rating = "8.5", // API не віддає рейтинг у базовому запиті
+        rating = "8.5",
         author = "MangaDex Author",
         genres = listOf("Манга", attr?.status ?: "Unknown"),
         description = parsedDescription
@@ -161,9 +181,9 @@ class SettingsRepository(private val context: Context) {
 
     val sortOptionFlow: Flow<SortOption> = context.dataStore.data.map { preferences ->
         val savedName = preferences[SORT_KEY] ?: SortOption.DEFAULT.name
-        try {
+        return@map try {
             SortOption.valueOf(savedName)
-        } catch (e: Exception) {
+        } catch (_: Exception) {
             SortOption.DEFAULT
         }
     }
@@ -174,6 +194,7 @@ class SettingsRepository(private val context: Context) {
         }
     }
 }
+
 
 data class Manga(
     val id: String,
@@ -196,6 +217,7 @@ val readingStatuses = listOf(
 
 data class MangaScreenState(
     val isLoading: Boolean = false,
+    val errorType: ApiErrorType? = null,
     val selectedStatus: String = "Усі",
     val mangaList: List<Manga> = emptyList(),
     val sortOption: SortOption = SortOption.DEFAULT
@@ -206,18 +228,20 @@ class MangaViewModel(application: Application) : AndroidViewModel(application) {
     private val settingsRepository = SettingsRepository(application)
 
     private val _isLoading = MutableStateFlow(false)
+    private val _errorType = MutableStateFlow<ApiErrorType?>(null)
     private val _selectedStatus = MutableStateFlow("Усі")
     private val _mangaList = MutableStateFlow<List<Manga>>(emptyList())
-    private val _localStatuses = MutableStateFlow<Map<String, String>>(emptyMap())
 
     val uiState: StateFlow<MangaScreenState> = combine(
         _isLoading,
+        _errorType,
         _selectedStatus,
         _mangaList,
         settingsRepository.sortOptionFlow
-    ) { isLoading, status, list, sort ->
+    ) { isLoading, error, status, list, sort ->
         MangaScreenState(
             isLoading = isLoading,
+            errorType = error,
             selectedStatus = status,
             mangaList = list,
             sortOption = sort
@@ -235,15 +259,23 @@ class MangaViewModel(application: Application) : AndroidViewModel(application) {
     fun fetchMangaFromApi() {
         viewModelScope.launch {
             _isLoading.value = true
+            _errorType.value = null
             try {
                 val response = MangaDexNetwork.apiService.getMangaList(limit = 20)
                 val domainList = response.data.map { dto ->
-                    val savedStatus = _localStatuses.value[dto.id] ?: "Усі"
-                    dto.toDomainModel(localStatus = savedStatus)
+                    dto.toDomainModel(localStatus = "Усі")
                 }
                 _mangaList.value = domainList
-            } catch (e: Exception) {
-                e.printStackTrace()
+            } catch (_: UnknownHostException) {
+                _errorType.value = ApiErrorType.NO_INTERNET
+            } catch (_: IOException) {
+                _errorType.value = ApiErrorType.NO_INTERNET
+            } catch (_: HttpException) {
+                _errorType.value = ApiErrorType.SERVER_ERROR
+            } catch (_: SerializationException) {
+                _errorType.value = ApiErrorType.PARSE_ERROR
+            } catch (_: Exception) {
+                _errorType.value = ApiErrorType.UNKNOWN
             } finally {
                 _isLoading.value = false
             }
@@ -255,9 +287,6 @@ class MangaViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun changeMangaStatus(mangaId: String, newStatus: String) {
-        _localStatuses.update { current ->
-            current + (mangaId to newStatus)
-        }
         _mangaList.update { currentList ->
             currentList.map { manga ->
                 if (manga.id == mangaId) manga.copy(status = newStatus) else manga
@@ -302,7 +331,8 @@ fun MangaApp(
                 state = uiState,
                 onStatusSelected = { status -> viewModel.selectStatus(status) },
                 onItemClick = { mangaId -> navController.navigate("details/$mangaId") },
-                onSettingsClick = { navController.navigate("settings") }
+                onSettingsClick = { navController.navigate("settings") },
+                onRetryClick = { viewModel.fetchMangaFromApi() }
             )
         }
 
@@ -342,8 +372,21 @@ fun CatalogScreen(
     state: MangaScreenState,
     onStatusSelected: (String) -> Unit,
     onItemClick: (String) -> Unit,
-    onSettingsClick: () -> Unit
+    onSettingsClick: () -> Unit,
+    onRetryClick: () -> Unit
 ) {
+    val context = LocalContext.current
+
+    val permissionLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.RequestPermission()
+    ) { isGranted ->
+        if (isGranted) {
+            Toast.makeText(context, "Сповіщення увімкнено!", Toast.LENGTH_SHORT).show()
+        } else {
+            Toast.makeText(context, "У доступі до сповіщень відмовлено", Toast.LENGTH_SHORT).show()
+        }
+    }
+
     val filteredManga = if (state.selectedStatus == "Усі") {
         state.mangaList
     } else {
@@ -361,6 +404,27 @@ fun CatalogScreen(
             TopAppBar(
                 title = { Text("Полиця манги (MangaDex)") },
                 actions = {
+                    IconButton(
+                        onClick = {
+                            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                                val hasPermission = ContextCompat.checkSelfPermission(
+                                    context,
+                                    Manifest.permission.POST_NOTIFICATIONS
+                                ) == PackageManager.PERMISSION_GRANTED
+
+                                if (hasPermission) {
+                                    Toast.makeText(context, "Сповіщення вже активовані", Toast.LENGTH_SHORT).show()
+                                } else {
+                                    permissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
+                                }
+                            } else {
+                                Toast.makeText(context, "Сповіщення увімкнено за замовчуванням", Toast.LENGTH_SHORT).show()
+                            }
+                        }
+                    ) {
+                        Text("🔔", style = MaterialTheme.typography.titleLarge)
+                    }
+
                     IconButton(onClick = onSettingsClick) {
                         Text("⚙️", style = MaterialTheme.typography.titleLarge)
                     }
@@ -396,14 +460,46 @@ fun CatalogScreen(
                 ) {
                     CircularProgressIndicator()
                 }
-            } else if (sortedManga.isEmpty()) {
+            }
+            // 2. СТАН ПОМИЛКИ (з кнопкою "Спробувати ще")
+            else if (state.errorType != null) {
+                Column(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .padding(24.dp),
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    verticalArrangement = Arrangement.Center
+                ) {
+                    Text(
+                        text = "Помилка завантаження",
+                        style = MaterialTheme.typography.titleLarge,
+                        fontWeight = FontWeight.Bold
+                    )
+                    Spacer(modifier = Modifier.height(8.dp))
+                    Text(
+                        text = state.errorType.message,
+                        style = MaterialTheme.typography.bodyMedium,
+                        textAlign = TextAlign.Center
+                    )
+                    Spacer(modifier = Modifier.height(16.dp))
+                    Button(onClick = onRetryClick) {
+                        Text("Спробувати ще")
+                    }
+                }
+            }
+            else if (sortedManga.isEmpty()) {
                 Box(
                     modifier = Modifier.fillMaxSize(),
                     contentAlignment = Alignment.Center
                 ) {
-                    Text("Манги не знайдено")
+                    Text(
+                        text = if (state.selectedStatus == "Усі") "Список манги порожній" else "Манги з таким статусом немає",
+                        style = MaterialTheme.typography.bodyLarge
+                    )
                 }
-            } else {
+            }
+            // 4. СТАН ВІДОБРАЖЕННЯ СПИСКУ
+            else {
                 LazyColumn(
                     modifier = Modifier.fillMaxSize(),
                     verticalArrangement = Arrangement.spacedBy(8.dp)
