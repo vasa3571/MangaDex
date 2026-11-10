@@ -1,7 +1,5 @@
 package com.example.mangadex
 
-import androidx.compose.runtime.getValue
-import androidx.compose.runtime.setValue
 import android.Manifest
 import android.app.Application
 import android.content.Context
@@ -11,8 +9,8 @@ import android.os.Bundle
 import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.rememberLauncherForActivityResult
-import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.compose.setContent
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
@@ -47,12 +45,17 @@ import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
+import androidx.compose.material3.pulltorefresh.PullToRefreshBox
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
@@ -71,6 +74,7 @@ import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.compose.rememberNavController
 import androidx.navigation.navArgument
+import coil.compose.SubcomposeAsyncImage
 import com.jakewharton.retrofit2.converter.kotlinx.serialization.asConverterFactory
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -110,7 +114,20 @@ data class MangaResponseDto(
 @Serializable
 data class MangaDataDto(
     @SerialName("id") val id: String,
-    @SerialName("attributes") val attributes: MangaAttributesDto? = null
+    @SerialName("attributes") val attributes: MangaAttributesDto? = null,
+    @SerialName("relationships") val relationships: List<RelationshipDto>? = emptyList()
+)
+
+@Serializable
+data class RelationshipDto(
+    @SerialName("id") val id: String,
+    @SerialName("type") val type: String,
+    @SerialName("attributes") val attributes: RelationshipAttributesDto? = null
+)
+
+@Serializable
+data class RelationshipAttributesDto(
+    @SerialName("fileName") val fileName: String? = null
 )
 
 @Serializable
@@ -124,7 +141,8 @@ data class MangaAttributesDto(
 interface MangaDexApiService {
     @GET("manga")
     suspend fun getMangaList(
-        @Query("limit") limit: Int = 20
+        @Query("limit") limit: Int = 20,
+        @Query("includes[]") includes: List<String> = listOf("cover_art")
     ): MangaResponseDto
 }
 
@@ -154,6 +172,16 @@ fun MangaDataDto.toDomainModel(localStatus: String = "Усі"): Manga {
         ?: attr?.description?.values?.firstOrNull()
         ?: "Опис відсутній"
 
+    val coverFileName = this.relationships
+        ?.find { it.type == "cover_art" }
+        ?.attributes?.fileName
+
+    val coverUrl = if (!coverFileName.isNullOrEmpty()) {
+        "https://uploads.mangadex.org/covers/${this.id}/$coverFileName"
+    } else {
+        null
+    }
+
     return Manga(
         id = this.id,
         title = parsedTitle,
@@ -162,7 +190,8 @@ fun MangaDataDto.toDomainModel(localStatus: String = "Усі"): Manga {
         rating = "8.5",
         author = "MangaDex Author",
         genres = listOf("Манга", attr?.status ?: "Unknown"),
-        description = parsedDescription
+        description = parsedDescription,
+        coverUrl = coverUrl
     )
 }
 
@@ -182,7 +211,7 @@ class SettingsRepository(private val context: Context) {
 
     val sortOptionFlow: Flow<SortOption> = context.dataStore.data.map { preferences ->
         val savedName = preferences[SORT_KEY] ?: SortOption.DEFAULT.name
-        return@map try {
+        try {
             SortOption.valueOf(savedName)
         } catch (_: Exception) {
             SortOption.DEFAULT
@@ -205,7 +234,8 @@ data class Manga(
     val rating: String,
     val author: String,
     val genres: List<String>,
-    val description: String
+    val description: String,
+    val coverUrl: String? = null
 )
 
 val readingStatuses = listOf(
@@ -333,7 +363,8 @@ fun MangaApp(
                 onStatusSelected = { status -> viewModel.selectStatus(status) },
                 onItemClick = { mangaId -> navController.navigate("details/$mangaId") },
                 onSettingsClick = { navController.navigate("settings") },
-                onRetryClick = { viewModel.fetchMangaFromApi() }
+                onRetryClick = { viewModel.fetchMangaFromApi() },
+                onRefresh = { viewModel.fetchMangaFromApi() }
             )
         }
 
@@ -374,7 +405,8 @@ fun CatalogScreen(
     onStatusSelected: (String) -> Unit,
     onItemClick: (String) -> Unit,
     onSettingsClick: () -> Unit,
-    onRetryClick: () -> Unit
+    onRetryClick: () -> Unit,
+    onRefresh: () -> Unit
 ) {
     val context = LocalContext.current
 
@@ -454,66 +486,64 @@ fun CatalogScreen(
                 }
             }
 
-            if (state.isLoading) {
-                Box(
-                    modifier = Modifier.fillMaxSize(),
-                    contentAlignment = Alignment.Center
-                ) {
-                    CircularProgressIndicator()
-                }
-            }
-            // 2. СТАН ПОМИЛКИ (з кнопкою "Спробувати ще")
-            else if (state.errorType != null) {
-                Column(
-                    modifier = Modifier
-                        .fillMaxSize()
-                        .padding(24.dp),
-                    horizontalAlignment = Alignment.CenterHorizontally,
-                    verticalArrangement = Arrangement.Center
-                ) {
-                    Text(
-                        text = "Помилка завантаження",
-                        style = MaterialTheme.typography.titleLarge,
-                        fontWeight = FontWeight.Bold
-                    )
-                    Spacer(modifier = Modifier.height(8.dp))
-                    Text(
-                        text = state.errorType.message,
-                        style = MaterialTheme.typography.bodyMedium,
-                        textAlign = TextAlign.Center
-                    )
-                    Spacer(modifier = Modifier.height(16.dp))
-                    Button(onClick = onRetryClick) {
-                        Text("Спробувати ще")
+            PullToRefreshBox(
+                isRefreshing = state.isLoading,
+                onRefresh = onRefresh,
+                modifier = Modifier.fillMaxSize()
+            ) {
+                when {
+                    state.errorType != null -> {
+                        Column(
+                            modifier = Modifier
+                                .fillMaxSize()
+                                .padding(24.dp),
+                            horizontalAlignment = Alignment.CenterHorizontally,
+                            verticalArrangement = Arrangement.Center
+                        ) {
+                            Text(
+                                text = "Помилка завантаження",
+                                style = MaterialTheme.typography.titleLarge,
+                                fontWeight = FontWeight.Bold
+                            )
+                            Spacer(modifier = Modifier.height(8.dp))
+                            Text(
+                                text = state.errorType.message,
+                                style = MaterialTheme.typography.bodyMedium,
+                                textAlign = TextAlign.Center
+                            )
+                            Spacer(modifier = Modifier.height(16.dp))
+                            Button(onClick = onRetryClick) {
+                                Text("Спробувати ще")
+                            }
+                        }
                     }
-                }
-            }
-            else if (sortedManga.isEmpty()) {
-                Box(
-                    modifier = Modifier.fillMaxSize(),
-                    contentAlignment = Alignment.Center
-                ) {
-                    Text(
-                        text = if (state.selectedStatus == "Усі") "Список манги порожній" else "Манги з таким статусом немає",
-                        style = MaterialTheme.typography.bodyLarge
-                    )
-                }
-            }
-            // 4. СТАН ВІДОБРАЖЕННЯ СПИСКУ
-            else {
-                LazyColumn(
-                    modifier = Modifier.fillMaxSize(),
-                    contentPadding = PaddingValues(horizontal = 12.dp, vertical = 8.dp),
-                    verticalArrangement = Arrangement.spacedBy(8.dp)
-                ) {
-                    items(
-                        items = sortedManga,
-                        key = { it.id }
-                    ) { manga ->
-                        MangaCard(
-                            manga = manga,
-                            onClick = { onItemClick(manga.id) }
-                        )
+                    sortedManga.isEmpty() && !state.isLoading -> {
+                        Box(
+                            modifier = Modifier.fillMaxSize(),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Text(
+                                text = if (state.selectedStatus == "Усі") "Список манги порожній" else "Манги з таким статусом немає",
+                                style = MaterialTheme.typography.bodyLarge
+                            )
+                        }
+                    }
+                    else -> {
+                        LazyColumn(
+                            modifier = Modifier.fillMaxSize(),
+                            contentPadding = PaddingValues(horizontal = 12.dp, vertical = 8.dp),
+                            verticalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            items(
+                                items = sortedManga,
+                                key = { it.id }
+                            ) { manga ->
+                                MangaCard(
+                                    manga = manga,
+                                    onClick = { onItemClick(manga.id) }
+                                )
+                            }
+                        }
                     }
                 }
             }
@@ -521,56 +551,35 @@ fun CatalogScreen(
     }
 }
 
-@OptIn(ExperimentalMaterial3Api::class)
+
 @Composable
-fun SettingsScreen(
-    currentSortOption: SortOption,
-    onSortOptionSelected: (SortOption) -> Unit,
-    onBackClick: () -> Unit
+fun MangaCoverImage(
+    coverUrl: String?,
+    title: String,
+    modifier: Modifier = Modifier
 ) {
-    Scaffold(
-        topBar = {
-            TopAppBar(
-                title = { Text("Налаштування") },
-                navigationIcon = {
-                    IconButton(onClick = onBackClick) {
-                        Text("←", style = MaterialTheme.typography.headlineMedium)
-                    }
-                }
-            )
-        }
-    ) { paddingValues ->
-        Column(
-            modifier = Modifier
-                .fillMaxSize()
-                .padding(paddingValues)
-                .padding(16.dp)
-        ) {
-            Text(
-                text = "Сортування за замовчуванням",
-                style = MaterialTheme.typography.titleMedium,
-                fontWeight = FontWeight.Bold
-            )
-
-            Spacer(modifier = Modifier.height(12.dp))
-
-            SortOption.entries.forEach { option ->
-                Row(
+    if (!coverUrl.isNullOrEmpty()) {
+        SubcomposeAsyncImage(
+            model = coverUrl,
+            contentDescription = title,
+            contentScale = ContentScale.Crop,
+            modifier = modifier.clip(RoundedCornerShape(8.dp)),
+            loading = {
+                Box(
                     modifier = Modifier
-                        .fillMaxWidth()
-                        .clickable { onSortOptionSelected(option) }
-                        .padding(vertical = 8.dp),
-                    verticalAlignment = Alignment.CenterVertically
+                        .fillMaxSize()
+                        .background(MaterialTheme.colorScheme.secondaryContainer),
+                    contentAlignment = Alignment.Center
                 ) {
-                    RadioButton(
-                        selected = (option == currentSortOption),
-                        onClick = { onSortOptionSelected(option) }
-                    )
-                    Spacer(modifier = Modifier.width(8.dp))
-                    Text(text = option.title)
+                    CircularProgressIndicator(modifier = Modifier.size(24.dp))
                 }
+            },
+            error = {
+                CoverPlaceholder(title = title, modifier = Modifier.fillMaxSize())
             }
-        }
+        )
+    } else {
+        CoverPlaceholder(title = title, modifier = modifier)
     }
 }
 
@@ -588,7 +597,8 @@ fun MangaCard(
             modifier = Modifier.padding(12.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
-            CoverPlaceholder(
+            MangaCoverImage(
+                coverUrl = manga.coverUrl,
                 title = manga.title,
                 modifier = Modifier.size(width = 88.dp, height = 116.dp)
             )
@@ -651,7 +661,8 @@ fun MangaDetailsScreen(
                 .verticalScroll(rememberScrollState())
                 .padding(16.dp)
         ) {
-            CoverPlaceholder(
+            MangaCoverImage(
+                coverUrl = manga.coverUrl,
                 title = manga.title,
                 modifier = Modifier
                     .fillMaxWidth()
@@ -735,6 +746,59 @@ fun CoverPlaceholder(
             style = MaterialTheme.typography.titleMedium,
             fontWeight = FontWeight.Bold
         )
+    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun SettingsScreen(
+    currentSortOption: SortOption,
+    onSortOptionSelected: (SortOption) -> Unit,
+    onBackClick: () -> Unit
+) {
+    Scaffold(
+        topBar = {
+            TopAppBar(
+                title = { Text("Налаштування") },
+                navigationIcon = {
+                    IconButton(onClick = onBackClick) {
+                        Text("←", style = MaterialTheme.typography.headlineMedium)
+                    }
+                }
+            )
+        }
+    ) { paddingValues ->
+        Column(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(paddingValues)
+                .padding(16.dp)
+        ) {
+            Text(
+                text = "Сортування за замовчуванням",
+                style = MaterialTheme.typography.titleMedium,
+                fontWeight = FontWeight.Bold
+            )
+
+            Spacer(modifier = Modifier.height(12.dp))
+
+            SortOption.entries.forEach { option ->
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clickable { onSortOptionSelected(option) }
+                        .padding(vertical = 8.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    RadioButton(
+                        selected = (option == currentSortOption),
+                        onClick = { onSortOptionSelected(option) }
+                    )
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text(text = option.title)
+                }
+            }
+        }
     }
 }
 
