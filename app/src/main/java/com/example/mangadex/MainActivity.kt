@@ -38,8 +38,10 @@ import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilterChip
+import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.RadioButton
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Surface
@@ -76,11 +78,15 @@ import androidx.navigation.compose.rememberNavController
 import androidx.navigation.navArgument
 import coil.compose.SubcomposeAsyncImage
 import com.jakewharton.retrofit2.converter.kotlinx.serialization.asConverterFactory
+import kotlinx.coroutines.FlowPreview
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.debounce
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.update
@@ -142,6 +148,7 @@ interface MangaDexApiService {
     @GET("manga")
     suspend fun getMangaList(
         @Query("limit") limit: Int = 20,
+        @Query("title") title: String? = null,
         @Query("includes[]") includes: List<String> = listOf("cover_art")
     ): MangaResponseDto
 }
@@ -249,30 +256,33 @@ val readingStatuses = listOf(
 data class MangaScreenState(
     val isLoading: Boolean = false,
     val errorType: ApiErrorType? = null,
+    val searchQuery: String = "",
     val selectedStatus: String = "Усі",
     val mangaList: List<Manga> = emptyList(),
     val sortOption: SortOption = SortOption.DEFAULT
 )
 
+@OptIn(FlowPreview::class)
 class MangaViewModel(application: Application) : AndroidViewModel(application) {
 
     private val settingsRepository = SettingsRepository(application)
 
     private val _isLoading = MutableStateFlow(false)
     private val _errorType = MutableStateFlow<ApiErrorType?>(null)
+    private val _searchQuery = MutableStateFlow("")
     private val _selectedStatus = MutableStateFlow("Усі")
     private val _mangaList = MutableStateFlow<List<Manga>>(emptyList())
 
+    private var searchJob: Job? = null
+
     val uiState: StateFlow<MangaScreenState> = combine(
-        _isLoading,
-        _errorType,
-        _selectedStatus,
-        _mangaList,
-        settingsRepository.sortOptionFlow
-    ) { isLoading, error, status, list, sort ->
+        combine(_isLoading, _errorType, _searchQuery, ::Triple),
+        combine(_selectedStatus, _mangaList, settingsRepository.sortOptionFlow, ::Triple)
+    ) { (isLoading, error, query), (status, list, sort) ->
         MangaScreenState(
             isLoading = isLoading,
             errorType = error,
+            searchQuery = query,
             selectedStatus = status,
             mangaList = list,
             sortOption = sort
@@ -287,12 +297,31 @@ class MangaViewModel(application: Application) : AndroidViewModel(application) {
         fetchMangaFromApi()
     }
 
+    fun onSearchQueryChanged(newQuery: String) {
+        _searchQuery.value = newQuery
+        searchJob?.cancel() // Скасовуємо попередню спробу
+
+        searchJob = viewModelScope.launch {
+            delay(500L) // Паузаперед відправкою (Debounce 500ms)
+            fetchMangaFromApi()
+        }
+    }
+
+    fun clearSearchQuery() {
+        _searchQuery.value = ""
+        fetchMangaFromApi()
+    }
+
     fun fetchMangaFromApi() {
         viewModelScope.launch {
             _isLoading.value = true
             _errorType.value = null
             try {
-                val response = MangaDexNetwork.apiService.getMangaList(limit = 20)
+                val query = _searchQuery.value.trim().ifEmpty { null }
+                val response = MangaDexNetwork.apiService.getMangaList(
+                    limit = 20,
+                    title = query
+                )
                 val domainList = response.data.map { dto ->
                     dto.toDomainModel(localStatus = "Усі")
                 }
@@ -332,6 +361,7 @@ class MangaViewModel(application: Application) : AndroidViewModel(application) {
     }
 }
 
+// -------------------- 6. MAIN ACTIVITY --------------------
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -360,6 +390,8 @@ fun MangaApp(
         composable("catalog") {
             CatalogScreen(
                 state = uiState,
+                onSearchQueryChanged = { query -> viewModel.onSearchQueryChanged(query) },
+                onClearSearch = { viewModel.clearSearchQuery() },
                 onStatusSelected = { status -> viewModel.selectStatus(status) },
                 onItemClick = { mangaId -> navController.navigate("details/$mangaId") },
                 onSettingsClick = { navController.navigate("settings") },
@@ -398,10 +430,14 @@ fun MangaApp(
     }
 }
 
+// -------------------- 7. CATALOG SCREEN (З Пошуком) --------------------
+
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun CatalogScreen(
     state: MangaScreenState,
+    onSearchQueryChanged: (String) -> Unit,
+    onClearSearch: () -> Unit,
     onStatusSelected: (String) -> Unit,
     onItemClick: (String) -> Unit,
     onSettingsClick: () -> Unit,
@@ -470,6 +506,27 @@ fun CatalogScreen(
                 .fillMaxSize()
                 .padding(paddingValues)
         ) {
+            // Поле пошуку
+            OutlinedTextField(
+                value = state.searchQuery,
+                onValueChange = onSearchQueryChanged,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 12.dp, vertical = 6.dp),
+                placeholder = { Text("Пошук манги...") },
+                singleLine = true,
+                trailingIcon = {
+                    if (state.searchQuery.isNotEmpty()) {
+                        IconButton(onClick = onClearSearch) {
+                            Text("✕", fontWeight = FontWeight.Bold)
+                        }
+                    } else {
+                        Text("🔍")
+                    }
+                }
+            )
+
+            // Фільтри категорій/статусів
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -518,14 +575,29 @@ fun CatalogScreen(
                         }
                     }
                     sortedManga.isEmpty() && !state.isLoading -> {
-                        Box(
-                            modifier = Modifier.fillMaxSize(),
-                            contentAlignment = Alignment.Center
+                        Column(
+                            modifier = Modifier
+                                .fillMaxSize()
+                                .padding(24.dp),
+                            horizontalAlignment = Alignment.CenterHorizontally,
+                            verticalArrangement = Arrangement.Center
                         ) {
-                            Text(
-                                text = if (state.selectedStatus == "Усі") "Список манги порожній" else "Манги з таким статусом немає",
-                                style = MaterialTheme.typography.bodyLarge
-                            )
+                            if (state.searchQuery.isNotEmpty()) {
+                                Text(
+                                    text = "За запитом «${state.searchQuery}» нічого не знайдено",
+                                    style = MaterialTheme.typography.titleMedium,
+                                    textAlign = TextAlign.Center
+                                )
+                                Spacer(modifier = Modifier.height(12.dp))
+                                Button(onClick = onClearSearch) {
+                                    Text("Очистити пошук")
+                                }
+                            } else {
+                                Text(
+                                    text = if (state.selectedStatus == "Усі") "Список манги порожній" else "Манги з таким статусом немає",
+                                    style = MaterialTheme.typography.bodyLarge
+                                )
+                            }
                         }
                     }
                     else -> {
@@ -551,6 +623,7 @@ fun CatalogScreen(
     }
 }
 
+// -------------------- 8. COIL COMPONENT & OTHER SCREENS --------------------
 
 @Composable
 fun MangaCoverImage(
