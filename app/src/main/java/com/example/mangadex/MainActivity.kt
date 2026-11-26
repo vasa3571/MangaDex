@@ -11,9 +11,11 @@ import androidx.activity.ComponentActivity
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -29,25 +31,34 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
+import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilterChip
+import androidx.compose.material3.FilterChipDefaults
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.NavigationBar
 import androidx.compose.material3.NavigationBarItem
+import androidx.compose.material3.NavigationBarItemDefaults
 import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.RadioButton
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
+import androidx.compose.material3.TopAppBarDefaults
+import androidx.compose.material3.darkColorScheme
+import androidx.compose.material3.lightColorScheme
 import androidx.compose.material3.pulltorefresh.PullToRefreshBox
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
@@ -58,12 +69,15 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
+import androidx.core.splashscreen.SplashScreen.Companion.installSplashScreen
 import androidx.datastore.core.DataStore
 import androidx.datastore.preferences.core.Preferences
 import androidx.datastore.preferences.core.edit
@@ -105,7 +119,67 @@ import retrofit2.http.Query
 import java.io.IOException
 import java.net.UnknownHostException
 
-// -------------------- 1. ТИПИ ПОМИЛОК --------------------
+// -------------------- 1. ВЛАСНА КОЛІРНА СХЕМА (БЕЗ DYNAMIC COLOR) --------------------
+
+private val LightMangaColorScheme = lightColorScheme(
+    primary = Color(0xFF4F46E5),             // Насичений індиго
+    onPrimary = Color(0xFFFFFFFF),
+    primaryContainer = Color(0xFFE0E7FF),
+    onPrimaryContainer = Color(0xFF1E1B4B),
+    secondary = Color(0xFFE11D48),           // Малиновий акцент (обране/статуси)
+    onSecondary = Color(0xFFFFFFFF),
+    secondaryContainer = Color(0xFFFFE4E6),
+    onSecondaryContainer = Color(0xFF881337),
+    background = Color(0xFFF8FAFC),
+    onBackground = Color(0xFF0F172A),
+    surface = Color(0xFFF8FAFC),
+    onSurface = Color(0xFF0F172A),
+    surfaceVariant = Color(0xFFE2E8F0),
+    onSurfaceVariant = Color(0xFF475569),
+    surfaceContainer = Color(0xFFFFFFFF),
+    surfaceContainerLow = Color(0xFFFFFFFF),
+    outline = Color(0xFFCBD5E1),
+    error = Color(0xFFDC2626),
+    onError = Color(0xFFFFFFFF)
+)
+
+private val DarkMangaColorScheme = darkColorScheme(
+    primary = Color(0xFF818CF8),             // Світлий індиго для темної теми
+    onPrimary = Color(0xFF1E1B4B),
+    primaryContainer = Color(0xFF312E81),
+    onPrimaryContainer = Color(0xFFE0E7FF),
+    secondary = Color(0xFFFB7185),           // М'який рожево-малиновий акцент
+    onSecondary = Color(0xFF4C0519),
+    secondaryContainer = Color(0xFF881337),
+    onSecondaryContainer = Color(0xFFFFE4E6),
+    background = Color(0xFF0F1117),
+    onBackground = Color(0xFFF1F5F9),
+    surface = Color(0xFF0F1117),
+    onSurface = Color(0xFFF1F5F9),
+    surfaceVariant = Color(0xFF1E293B),
+    onSurfaceVariant = Color(0xFF94A3B8),
+    surfaceContainer = Color(0xFF181B24),
+    surfaceContainerLow = Color(0xFF181B24),
+    outline = Color(0xFF334155),
+    error = Color(0xFFF87171),
+    onError = Color(0xFF450A0A)
+)
+
+@Composable
+fun MangaShelfTheme(
+    darkTheme: Boolean = isSystemInDarkTheme(),
+    content: @Composable () -> Unit
+) {
+    // Використовуємо виключно власну палітру, ігноруючи dynamicColor шпалер
+    val colorScheme = if (darkTheme) DarkMangaColorScheme else LightMangaColorScheme
+
+    MaterialTheme(
+        colorScheme = colorScheme,
+        content = content
+    )
+}
+
+// -------------------- 2. ТИПИ ПОМИЛОК --------------------
 
 enum class ApiErrorType(val message: String) {
     NO_INTERNET("Немає підключення до інтернету. Перевірте авіарежим або Wi-Fi."),
@@ -114,7 +188,7 @@ enum class ApiErrorType(val message: String) {
     UNKNOWN("Сталася невідома помилка. Спробуйте ще раз.")
 }
 
-// -------------------- 2. DTO ТА NETWORK --------------------
+// -------------------- 3. DTO ТА NETWORK --------------------
 
 @Serializable
 data class MangaResponseDto(
@@ -206,7 +280,7 @@ fun MangaDataDto.toDomainModel(localStatus: String = "Усі"): Manga {
     )
 }
 
-// -------------------- 3. DATASTORE (Зображення Обраного ID) --------------------
+// -------------------- 4. DATASTORE --------------------
 
 val Context.dataStore: DataStore<Preferences> by preferencesDataStore(name = "manga_settings")
 
@@ -253,7 +327,7 @@ class SettingsRepository(private val context: Context) {
     }
 }
 
-// -------------------- 4. DOMAIN MODEL --------------------
+// -------------------- 5. DOMAIN MODEL --------------------
 
 data class Manga(
     val id: String,
@@ -274,7 +348,7 @@ val readingStatuses = listOf(
     "Хочу прочитати"
 )
 
-// -------------------- 5. STATE & VIEWMODEL --------------------
+// -------------------- 6. STATE & VIEWMODEL --------------------
 
 data class MangaScreenState(
     val isLoading: Boolean = false,
@@ -392,13 +466,19 @@ class MangaViewModel(application: Application) : AndroidViewModel(application) {
     }
 }
 
+// -------------------- 7. MAIN ACTIVITY (SPLASH SCREEN) --------------------
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
+        // Ініціалізація Splash Screen перед super.onCreate
+        installSplashScreen()
         super.onCreate(savedInstanceState)
         setContent {
-            MaterialTheme {
-                Surface(modifier = Modifier.fillMaxSize()) {
+            MangaShelfTheme {
+                Surface(
+                    modifier = Modifier.fillMaxSize(),
+                    color = MaterialTheme.colorScheme.background
+                ) {
                     MangaApp()
                 }
             }
@@ -417,9 +497,13 @@ fun MangaApp(
     val currentRoute = navBackStackEntry?.destination?.route
 
     Scaffold(
+        containerColor = MaterialTheme.colorScheme.background,
         bottomBar = {
             if (currentRoute == "catalog" || currentRoute == "favorites") {
-                NavigationBar {
+                NavigationBar(
+                    containerColor = MaterialTheme.colorScheme.surfaceContainer,
+                    contentColor = MaterialTheme.colorScheme.onSurface
+                ) {
                     NavigationBarItem(
                         selected = currentRoute == "catalog",
                         onClick = {
@@ -430,7 +514,17 @@ fun MangaApp(
                             }
                         },
                         icon = { Text("📚", style = MaterialTheme.typography.titleLarge) },
-                        label = { Text("Каталог") }
+                        label = {
+                            Text(
+                                text = "Каталог",
+                                style = MaterialTheme.typography.labelMedium,
+                                fontWeight = FontWeight.SemiBold
+                            )
+                        },
+                        colors = NavigationBarItemDefaults.colors(
+                            indicatorColor = MaterialTheme.colorScheme.primaryContainer,
+                            selectedTextColor = MaterialTheme.colorScheme.primary
+                        )
                     )
 
                     NavigationBarItem(
@@ -443,7 +537,17 @@ fun MangaApp(
                             }
                         },
                         icon = { Text("❤️", style = MaterialTheme.typography.titleLarge) },
-                        label = { Text("Добірка") }
+                        label = {
+                            Text(
+                                text = "Добірка",
+                                style = MaterialTheme.typography.labelMedium,
+                                fontWeight = FontWeight.SemiBold
+                            )
+                        },
+                        colors = NavigationBarItemDefaults.colors(
+                            indicatorColor = MaterialTheme.colorScheme.secondaryContainer,
+                            selectedTextColor = MaterialTheme.colorScheme.secondary
+                        )
                     )
                 }
             }
@@ -510,6 +614,7 @@ fun MangaApp(
     }
 }
 
+// -------------------- 8. CATALOG & FAVORITES SCREENS --------------------
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -549,9 +654,20 @@ fun CatalogScreen(
     }
 
     Scaffold(
+        containerColor = MaterialTheme.colorScheme.background,
         topBar = {
             TopAppBar(
-                title = { Text("Полиця манги") },
+                title = {
+                    Text(
+                        text = "Полиця манги",
+                        style = MaterialTheme.typography.titleLarge,
+                        fontWeight = FontWeight.Bold
+                    )
+                },
+                colors = TopAppBarDefaults.topAppBarColors(
+                    containerColor = MaterialTheme.colorScheme.background,
+                    titleContentColor = MaterialTheme.colorScheme.onBackground
+                ),
                 actions = {
                     IconButton(
                         onClick = {
@@ -571,11 +687,11 @@ fun CatalogScreen(
                             }
                         }
                     ) {
-                        Text("🔔", style = MaterialTheme.typography.titleLarge)
+                        Text("🔔", style = MaterialTheme.typography.titleMedium)
                     }
 
                     IconButton(onClick = onSettingsClick) {
-                        Text("⚙️", style = MaterialTheme.typography.titleLarge)
+                        Text("⚙️", style = MaterialTheme.typography.titleMedium)
                     }
                 }
             )
@@ -591,16 +707,33 @@ fun CatalogScreen(
                 onValueChange = onSearchQueryChanged,
                 modifier = Modifier
                     .fillMaxWidth()
-                    .padding(horizontal = 12.dp, vertical = 6.dp),
-                placeholder = { Text("Пошук манги...") },
+                    .padding(horizontal = 16.dp, vertical = 6.dp),
+                shape = RoundedCornerShape(14.dp),
+                placeholder = {
+                    Text(
+                        text = "Пошук за назвою...",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                },
                 singleLine = true,
+                colors = OutlinedTextFieldDefaults.colors(
+                    focusedBorderColor = MaterialTheme.colorScheme.primary,
+                    unfocusedBorderColor = MaterialTheme.colorScheme.outline,
+                    focusedContainerColor = MaterialTheme.colorScheme.surfaceContainer,
+                    unfocusedContainerColor = MaterialTheme.colorScheme.surfaceContainer
+                ),
                 trailingIcon = {
                     if (state.searchQuery.isNotEmpty()) {
                         IconButton(onClick = onClearSearch) {
-                            Text("✕", fontWeight = FontWeight.Bold)
+                            Text(
+                                text = "✕",
+                                style = MaterialTheme.typography.labelLarge,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
                         }
                     } else {
-                        Text("🔍")
+                        Text("🔍", style = MaterialTheme.typography.bodyLarge)
                     }
                 }
             )
@@ -609,14 +742,24 @@ fun CatalogScreen(
                 modifier = Modifier
                     .fillMaxWidth()
                     .horizontalScroll(rememberScrollState())
-                    .padding(horizontal = 8.dp, vertical = 4.dp),
+                    .padding(horizontal = 16.dp, vertical = 6.dp),
                 horizontalArrangement = Arrangement.spacedBy(8.dp)
             ) {
                 readingStatuses.forEach { status ->
                     FilterChip(
                         selected = state.selectedStatus == status,
                         onClick = { onStatusSelected(status) },
-                        label = { Text(status) }
+                        shape = RoundedCornerShape(10.dp),
+                        colors = FilterChipDefaults.filterChipColors(
+                            selectedContainerColor = MaterialTheme.colorScheme.primaryContainer,
+                            selectedLabelColor = MaterialTheme.colorScheme.onPrimaryContainer
+                        ),
+                        label = {
+                            Text(
+                                text = status,
+                                style = MaterialTheme.typography.labelLarge
+                            )
+                        }
                     )
                 }
             }
@@ -638,17 +781,25 @@ fun CatalogScreen(
                             Text(
                                 text = "Помилка завантаження",
                                 style = MaterialTheme.typography.titleLarge,
-                                fontWeight = FontWeight.Bold
+                                fontWeight = FontWeight.Bold,
+                                color = MaterialTheme.colorScheme.error
                             )
                             Spacer(modifier = Modifier.height(8.dp))
                             Text(
                                 text = state.errorType.message,
                                 style = MaterialTheme.typography.bodyMedium,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
                                 textAlign = TextAlign.Center
                             )
                             Spacer(modifier = Modifier.height(16.dp))
-                            Button(onClick = onRetryClick) {
-                                Text("Спробувати ще")
+                            Button(
+                                onClick = onRetryClick,
+                                shape = RoundedCornerShape(12.dp)
+                            ) {
+                                Text(
+                                    text = "Спробувати ще",
+                                    style = MaterialTheme.typography.labelLarge
+                                )
                             }
                         }
                     }
@@ -664,16 +815,24 @@ fun CatalogScreen(
                                 Text(
                                     text = "За запитом «${state.searchQuery}» нічого не знайдено",
                                     style = MaterialTheme.typography.titleMedium,
+                                    color = MaterialTheme.colorScheme.onBackground,
                                     textAlign = TextAlign.Center
                                 )
                                 Spacer(modifier = Modifier.height(12.dp))
-                                Button(onClick = onClearSearch) {
-                                    Text("Очистити пошук")
+                                Button(
+                                    onClick = onClearSearch,
+                                    shape = RoundedCornerShape(12.dp)
+                                ) {
+                                    Text(
+                                        text = "Очистити пошук",
+                                        style = MaterialTheme.typography.labelLarge
+                                    )
                                 }
                             } else {
                                 Text(
                                     text = if (state.selectedStatus == "Усі") "Список манги порожній" else "Манги з таким статусом немає",
-                                    style = MaterialTheme.typography.bodyLarge
+                                    style = MaterialTheme.typography.bodyLarge,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
                                 )
                             }
                         }
@@ -681,8 +840,8 @@ fun CatalogScreen(
                     else -> {
                         LazyColumn(
                             modifier = Modifier.fillMaxSize(),
-                            contentPadding = PaddingValues(horizontal = 12.dp, vertical = 8.dp),
-                            verticalArrangement = Arrangement.spacedBy(8.dp)
+                            contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp),
+                            verticalArrangement = Arrangement.spacedBy(12.dp)
                         ) {
                             items(
                                 items = sortedManga,
@@ -711,16 +870,26 @@ fun FavoritesScreen(
     onFavoriteToggle: (String) -> Unit,
     onSettingsClick: () -> Unit
 ) {
-    // Філтруємо мангу за збереженими ID з DataStore
     val favoriteManga = state.mangaList.filter { state.favoriteIds.contains(it.id) }
 
     Scaffold(
+        containerColor = MaterialTheme.colorScheme.background,
         topBar = {
             TopAppBar(
-                title = { Text("Особиста добірка") },
+                title = {
+                    Text(
+                        text = "Особиста добірка",
+                        style = MaterialTheme.typography.titleLarge,
+                        fontWeight = FontWeight.Bold
+                    )
+                },
+                colors = TopAppBarDefaults.topAppBarColors(
+                    containerColor = MaterialTheme.colorScheme.background,
+                    titleContentColor = MaterialTheme.colorScheme.onBackground
+                ),
                 actions = {
                     IconButton(onClick = onSettingsClick) {
-                        Text("⚙️", style = MaterialTheme.typography.titleLarge)
+                        Text("⚙️", style = MaterialTheme.typography.titleMedium)
                     }
                 }
             )
@@ -738,12 +907,14 @@ fun FavoritesScreen(
                 Text(
                     text = "Ваша добірка порожня",
                     style = MaterialTheme.typography.titleLarge,
-                    fontWeight = FontWeight.Bold
+                    fontWeight = FontWeight.Bold,
+                    color = MaterialTheme.colorScheme.onBackground
                 )
                 Spacer(modifier = Modifier.height(8.dp))
                 Text(
                     text = "Додайте мангу до обраного, натиснувши на ❤️ у каталозі або на екрані деталей.",
                     style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
                     textAlign = TextAlign.Center
                 )
             }
@@ -752,8 +923,8 @@ fun FavoritesScreen(
                 modifier = Modifier
                     .fillMaxSize()
                     .padding(paddingValues),
-                contentPadding = PaddingValues(horizontal = 12.dp, vertical = 8.dp),
-                verticalArrangement = Arrangement.spacedBy(8.dp)
+                contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp),
+                verticalArrangement = Arrangement.spacedBy(12.dp)
             ) {
                 items(
                     items = favoriteManga,
@@ -771,6 +942,7 @@ fun FavoritesScreen(
     }
 }
 
+// -------------------- 9. МАКЕТ КАРТКИ ТА ЕКРАНА ДЕТАЛЕЙ --------------------
 
 @Composable
 fun MangaCoverImage(
@@ -783,15 +955,18 @@ fun MangaCoverImage(
             model = coverUrl,
             contentDescription = title,
             contentScale = ContentScale.Crop,
-            modifier = modifier.clip(RoundedCornerShape(8.dp)),
+            modifier = modifier.clip(RoundedCornerShape(12.dp)),
             loading = {
                 Box(
                     modifier = Modifier
                         .fillMaxSize()
-                        .background(MaterialTheme.colorScheme.secondaryContainer),
+                        .background(MaterialTheme.colorScheme.primaryContainer),
                     contentAlignment = Alignment.Center
                 ) {
-                    CircularProgressIndicator(modifier = Modifier.size(24.dp))
+                    CircularProgressIndicator(
+                        modifier = Modifier.size(24.dp),
+                        color = MaterialTheme.colorScheme.primary
+                    )
                 }
             },
             error = {
@@ -813,7 +988,13 @@ fun MangaCard(
     Card(
         modifier = Modifier
             .fillMaxWidth()
-            .clickable(onClick = onClick)
+            .clickable(onClick = onClick),
+        shape = RoundedCornerShape(16.dp),
+        colors = CardDefaults.cardColors(
+            containerColor = MaterialTheme.colorScheme.surfaceContainerLow
+        ),
+        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.4f)),
+        elevation = CardDefaults.cardElevation(defaultElevation = 2.dp)
     ) {
         Row(
             modifier = Modifier.padding(12.dp),
@@ -822,10 +1003,10 @@ fun MangaCard(
             MangaCoverImage(
                 coverUrl = manga.coverUrl,
                 title = manga.title,
-                modifier = Modifier.size(width = 88.dp, height = 116.dp)
+                modifier = Modifier.size(width = 86.dp, height = 122.dp)
             )
 
-            Spacer(modifier = Modifier.width(12.dp))
+            Spacer(modifier = Modifier.width(14.dp))
 
             Column(
                 modifier = Modifier.weight(1f)
@@ -833,31 +1014,76 @@ fun MangaCard(
                 Row(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically
+                    verticalAlignment = Alignment.Top
                 ) {
                     Text(
                         text = manga.title,
                         style = MaterialTheme.typography.titleMedium,
                         fontWeight = FontWeight.Bold,
-                        modifier = Modifier.weight(1f)
+                        color = MaterialTheme.colorScheme.onSurface,
+                        maxLines = 2,
+                        overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier
+                            .weight(1f)
+                            .padding(end = 4.dp)
                     )
 
-                    IconButton(onClick = onFavoriteToggle) {
-                        Text(if (isFavorite) "❤️" else "🤍", style = MaterialTheme.typography.titleLarge)
+                    Surface(
+                        shape = CircleShape,
+                        color = if (isFavorite) {
+                            MaterialTheme.colorScheme.secondaryContainer
+                        } else {
+                            MaterialTheme.colorScheme.surfaceVariant
+                        },
+                        modifier = Modifier
+                            .size(34.dp)
+                            .clip(CircleShape)
+                            .clickable(onClick = onFavoriteToggle)
+                    ) {
+                        Box(contentAlignment = Alignment.Center) {
+                            Text(
+                                text = if (isFavorite) "❤️" else "🤍",
+                                style = MaterialTheme.typography.bodyMedium
+                            )
+                        }
                     }
                 }
 
-                Spacer(modifier = Modifier.height(4.dp))
+                Spacer(modifier = Modifier.height(8.dp))
 
-                Text("Статус: ${manga.status}")
-                if (manga.year > 0) Text("Рік: ${manga.year}")
+                // Бейдж статусу читання
+                Surface(
+                    shape = RoundedCornerShape(8.dp),
+                    color = MaterialTheme.colorScheme.primaryContainer
+                ) {
+                    Text(
+                        text = manga.status,
+                        style = MaterialTheme.typography.labelMedium,
+                        color = MaterialTheme.colorScheme.onPrimaryContainer,
+                        fontWeight = FontWeight.SemiBold,
+                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
+                    )
+                }
 
-                Spacer(modifier = Modifier.height(4.dp))
+                Spacer(modifier = Modifier.height(8.dp))
 
-                Text(
-                    text = "Натисни, щоб переглянути деталі",
-                    style = MaterialTheme.typography.bodySmall
-                )
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(12.dp)
+                ) {
+                    if (manga.year > 0) {
+                        Text(
+                            text = "📅 ${manga.year}",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                    Text(
+                        text = "⭐ ${manga.rating}",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
             }
         }
     }
@@ -875,17 +1101,35 @@ fun MangaDetailsScreen(
     var statusMenuExpanded by remember { mutableStateOf(false) }
 
     Scaffold(
+        containerColor = MaterialTheme.colorScheme.background,
         topBar = {
             TopAppBar(
-                title = { Text("Деталі манги") },
+                title = {
+                    Text(
+                        text = "Про тайтл",
+                        style = MaterialTheme.typography.titleLarge,
+                        fontWeight = FontWeight.Bold
+                    )
+                },
+                colors = TopAppBarDefaults.topAppBarColors(
+                    containerColor = MaterialTheme.colorScheme.background,
+                    titleContentColor = MaterialTheme.colorScheme.onBackground
+                ),
                 navigationIcon = {
                     IconButton(onClick = onBackClick) {
-                        Text("←", style = MaterialTheme.typography.headlineMedium)
+                        Text(
+                            text = "←",
+                            style = MaterialTheme.typography.headlineMedium,
+                            color = MaterialTheme.colorScheme.onBackground
+                        )
                     }
                 },
                 actions = {
                     IconButton(onClick = onFavoriteToggle) {
-                        Text(if (isFavorite) "❤️" else "🤍", style = MaterialTheme.typography.titleLarge)
+                        Text(
+                            text = if (isFavorite) "❤️" else "🤍",
+                            style = MaterialTheme.typography.titleLarge
+                        )
                     }
                 }
             )
@@ -898,66 +1142,110 @@ fun MangaDetailsScreen(
                 .verticalScroll(rememberScrollState())
                 .padding(16.dp)
         ) {
-            MangaCoverImage(
-                coverUrl = manga.coverUrl,
-                title = manga.title,
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .height(240.dp)
-            )
+            // Герой-блок з обкладинкою та метаданими
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.Top
+            ) {
+                MangaCoverImage(
+                    coverUrl = manga.coverUrl,
+                    title = manga.title,
+                    modifier = Modifier.size(width = 130.dp, height = 185.dp)
+                )
 
-            Spacer(modifier = Modifier.height(16.dp))
+                Spacer(modifier = Modifier.width(16.dp))
 
-            Text(
-                text = manga.title,
-                style = MaterialTheme.typography.headlineMedium,
-                fontWeight = FontWeight.Bold
-            )
+                Column(
+                    modifier = Modifier.weight(1f)
+                ) {
+                    Text(
+                        text = manga.title,
+                        style = MaterialTheme.typography.titleLarge,
+                        fontWeight = FontWeight.Bold,
+                        color = MaterialTheme.colorScheme.onBackground
+                    )
 
-            Spacer(modifier = Modifier.height(12.dp))
+                    Spacer(modifier = Modifier.height(10.dp))
 
-            if (manga.year > 0) Text("Рік випуску: ${manga.year}")
+                    if (manga.year > 0) {
+                        Text(
+                            text = "Рік: ${manga.year}",
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                        Spacer(modifier = Modifier.height(4.dp))
+                    }
 
-            Spacer(modifier = Modifier.height(12.dp))
+                    Text(
+                        text = "Рейтинг: ⭐ ${manga.rating}",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
 
-            Text(
-                text = "Опис",
-                style = MaterialTheme.typography.titleMedium,
-                fontWeight = FontWeight.Bold
-            )
-            Text(
-                text = manga.description,
-                style = MaterialTheme.typography.bodyLarge
-            )
+                    Spacer(modifier = Modifier.height(14.dp))
+
+                    Box {
+                        Button(
+                            onClick = { statusMenuExpanded = true },
+                            shape = RoundedCornerShape(12.dp),
+                            colors = ButtonDefaults.buttonColors(
+                                containerColor = MaterialTheme.colorScheme.primary,
+                                contentColor = MaterialTheme.colorScheme.onPrimary
+                            )
+                        ) {
+                            Text(
+                                text = "Статус: ${manga.status}",
+                                style = MaterialTheme.typography.labelLarge
+                            )
+                        }
+
+                        DropdownMenu(
+                            expanded = statusMenuExpanded,
+                            onDismissRequest = { statusMenuExpanded = false }
+                        ) {
+                            readingStatuses
+                                .filter { it != "Усі" }
+                                .forEach { status ->
+                                    DropdownMenuItem(
+                                        text = {
+                                            Text(
+                                                text = status,
+                                                style = MaterialTheme.typography.bodyMedium
+                                            )
+                                        },
+                                        onClick = {
+                                            onStatusChange(status)
+                                            statusMenuExpanded = false
+                                        }
+                                    )
+                                }
+                        }
+                    }
+                }
+            }
 
             Spacer(modifier = Modifier.height(20.dp))
 
-            Text(
-                text = "Статус читання",
-                style = MaterialTheme.typography.titleMedium,
-                fontWeight = FontWeight.Bold
-            )
-
-            Box {
-                Button(onClick = { statusMenuExpanded = true }) {
-                    Text(manga.status)
-                }
-
-                DropdownMenu(
-                    expanded = statusMenuExpanded,
-                    onDismissRequest = { statusMenuExpanded = false }
-                ) {
-                    readingStatuses
-                        .filter { it != "Усі" }
-                        .forEach { status ->
-                            DropdownMenuItem(
-                                text = { Text(status) },
-                                onClick = {
-                                    onStatusChange(status)
-                                    statusMenuExpanded = false
-                                }
-                            )
-                        }
+            // Контейнер опису за макетом
+            Surface(
+                modifier = Modifier.fillMaxWidth(),
+                shape = RoundedCornerShape(16.dp),
+                color = MaterialTheme.colorScheme.surfaceContainer,
+                border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.3f))
+            ) {
+                Column(modifier = Modifier.padding(16.dp)) {
+                    Text(
+                        text = "Опис",
+                        style = MaterialTheme.typography.titleMedium,
+                        fontWeight = FontWeight.Bold,
+                        color = MaterialTheme.colorScheme.primary
+                    )
+                    Spacer(modifier = Modifier.height(8.dp))
+                    Text(
+                        text = manga.description,
+                        style = MaterialTheme.typography.bodyLarge,
+                        color = MaterialTheme.colorScheme.onSurface
+                    )
                 }
             }
         }
@@ -972,16 +1260,20 @@ fun CoverPlaceholder(
     Box(
         modifier = modifier
             .background(
-                color = MaterialTheme.colorScheme.secondaryContainer,
-                shape = RoundedCornerShape(8.dp)
+                color = MaterialTheme.colorScheme.primaryContainer,
+                shape = RoundedCornerShape(12.dp)
             )
             .padding(8.dp),
         contentAlignment = Alignment.Center
     ) {
         Text(
             text = title,
-            style = MaterialTheme.typography.titleMedium,
-            fontWeight = FontWeight.Bold
+            style = MaterialTheme.typography.labelLarge,
+            fontWeight = FontWeight.Bold,
+            color = MaterialTheme.colorScheme.onPrimaryContainer,
+            textAlign = TextAlign.Center,
+            maxLines = 3,
+            overflow = TextOverflow.Ellipsis
         )
     }
 }
@@ -994,12 +1286,26 @@ fun SettingsScreen(
     onBackClick: () -> Unit
 ) {
     Scaffold(
+        containerColor = MaterialTheme.colorScheme.background,
         topBar = {
             TopAppBar(
-                title = { Text("Налаштування") },
+                title = {
+                    Text(
+                        text = "Налаштування",
+                        style = MaterialTheme.typography.titleLarge,
+                        fontWeight = FontWeight.Bold
+                    )
+                },
+                colors = TopAppBarDefaults.topAppBarColors(
+                    containerColor = MaterialTheme.colorScheme.background
+                ),
                 navigationIcon = {
                     IconButton(onClick = onBackClick) {
-                        Text("←", style = MaterialTheme.typography.headlineMedium)
+                        Text(
+                            text = "←",
+                            style = MaterialTheme.typography.headlineMedium,
+                            color = MaterialTheme.colorScheme.onBackground
+                        )
                     }
                 }
             )
@@ -1014,7 +1320,8 @@ fun SettingsScreen(
             Text(
                 text = "Сортування за замовчуванням",
                 style = MaterialTheme.typography.titleMedium,
-                fontWeight = FontWeight.Bold
+                fontWeight = FontWeight.Bold,
+                color = MaterialTheme.colorScheme.onBackground
             )
 
             Spacer(modifier = Modifier.height(12.dp))
@@ -1023,8 +1330,9 @@ fun SettingsScreen(
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
+                        .clip(RoundedCornerShape(12.dp))
                         .clickable { onSortOptionSelected(option) }
-                        .padding(vertical = 8.dp),
+                        .padding(vertical = 8.dp, horizontal = 4.dp),
                     verticalAlignment = Alignment.CenterVertically
                 ) {
                     RadioButton(
@@ -1032,7 +1340,11 @@ fun SettingsScreen(
                         onClick = { onSortOptionSelected(option) }
                     )
                     Spacer(modifier = Modifier.width(8.dp))
-                    Text(text = option.title)
+                    Text(
+                        text = option.title,
+                        style = MaterialTheme.typography.bodyLarge,
+                        color = MaterialTheme.colorScheme.onBackground
+                    )
                 }
             }
         }
@@ -1045,9 +1357,15 @@ fun NotFoundScreen(
     onBackClick: () -> Unit
 ) {
     Scaffold(
+        containerColor = MaterialTheme.colorScheme.background,
         topBar = {
             TopAppBar(
-                title = { Text("Деталі манги") },
+                title = {
+                    Text(
+                        text = "Деталі манги",
+                        style = MaterialTheme.typography.titleLarge
+                    )
+                },
                 navigationIcon = {
                     IconButton(onClick = onBackClick) {
                         Text(
@@ -1069,13 +1387,20 @@ fun NotFoundScreen(
         ) {
             Text(
                 text = "Мангу не знайдено",
-                style = MaterialTheme.typography.titleLarge
+                style = MaterialTheme.typography.titleLarge,
+                color = MaterialTheme.colorScheme.onBackground
             )
 
             Spacer(modifier = Modifier.height(16.dp))
 
-            Button(onClick = onBackClick) {
-                Text("Повернутися до каталогу")
+            Button(
+                onClick = onBackClick,
+                shape = RoundedCornerShape(12.dp)
+            ) {
+                Text(
+                    text = "Повернутися до каталогу",
+                    style = MaterialTheme.typography.labelLarge
+                )
             }
         }
     }
