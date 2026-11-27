@@ -19,7 +19,6 @@
 - **Навігація:** Jetpack Navigation Compose
 
 ## Скріншоти
-*(Розмістіть ваші 4–6 скріншотів у папці `docs/screenshots/` та вкажіть посилання нижче)*
 | Каталог (Світла тема) | Каталог (Темна тема) | Деталі тайтлу | Особиста добірка |
 | :---: | :---: | :---: | :---: |
 | ![Catalog Light](docs/screenshots/catalog_light.png) | ![Catalog Dark](docs/screenshots/catalog_dark.png) | ![Details](docs/screenshots/details.png) | ![Favorites](docs/screenshots/favorites.png) |
