@@ -6,34 +6,26 @@ plugins {
 
 android {
     namespace = "com.example.mangadex"
-    compileSdk {
-        version = release(37)
-    }
+    compileSdk = 36
 
     defaultConfig {
         applicationId = "com.example.mangadex"
-        minSdk = 24
-        targetSdk = 37
+        minSdk = 26
+        targetSdk = 36 // Актуальна вимога Google Play
         versionCode = 1
-        versionName = "1.0"
+        versionName = "1.0.0"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
 
     buildTypes {
         release {
-            optimization {
-                enable = false
-            }
+            // Вмикаємо R8 мінімізацію коду та стиснення ресурсів
+            isMinifyEnabled = true
+            isShrinkResources = true
         }
     }
-    compileOptions {
-        sourceCompatibility = JavaVersion.VERSION_11
-        targetCompatibility = JavaVersion.VERSION_11
-    }
-    buildFeatures {
-        compose = true
-    }
+    // ... решта налаштувань (compileOptions, kotlinOptions, buildFeatures)
 }
 
 dependencies {
