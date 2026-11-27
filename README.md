@@ -27,4 +27,4 @@
 
 1. Клонуйте репозиторій:
    ```bash
-   git clone [https://github.com/](https://github.com/)<ваш-логін>/<назва-репозиторію>.git
+   git clone https://github.com/vasa3571/MangaDex.git
